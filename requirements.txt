@@ -1,0 +1,28 @@
+# Core dependencies
+fastapi
+uvicorn[standard]
+click
+python-dotenv
+nest-asyncio
+
+# LangChain and AI
+langchain
+langchain-community
+langchain-google-genai
+browser-use
+
+# Web scraping
+playwright
+beautifulsoup4
+lxml
+
+# Data processing
+pydantic
+numpy
+requests
+scikit-learn
+
+# Optional (for future)
+# fastapi-limiter
+# redis
+# psycopg2-binary
