@@ -110,6 +110,11 @@ web_browser_agent/
    GEMINI_API_KEY=your_api_key_here
    ```
 
+**Commom error(if getting Typerror with protobuf)**
+   ```bash
+   export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python    
+```
+
 ## 🖥️ Usage
 
 ### CLI Commands

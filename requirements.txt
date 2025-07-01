@@ -5,11 +5,12 @@ click
 python-dotenv
 nest-asyncio
 
+
 # LangChain and AI
 langchain
 langchain-community
 langchain-google-genai
-browser-use
+
 
 # Web scraping
 playwright
