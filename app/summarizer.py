@@ -1,6 +1,7 @@
 """
 Content Summarizer module.
 Uses Gemini to create comprehensive summaries from multiple scraped sources.
+Fixed version with proper config references and error handling.
 """
 
 import json
@@ -13,7 +14,6 @@ from .config import config
 from .models import ScrapedContent, SummaryResult
 
 # Set up logging
-logging.basicConfig(level=config.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 class ContentSummarizer:
@@ -29,11 +29,17 @@ class ContentSummarizer:
                 google_api_key=config.GOOGLE_API_KEY
             )
             
+            # Set minimum content length (fallback if not in config)
+            self.min_content_length = getattr(config, 'MIN_CONTENT_LENGTH', 100)
+            
             logger.info("Content summarizer initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize content summarizer: {e}")
-            raise
+            # Don't raise here - allow the app to start but handle errors gracefully
+            self.llm = None
+            self.min_content_length = 100
+            logger.warning("Content summarizer will operate in fallback mode")
     
     def summarize_content(self, query: str, scraped_content: List[ScrapedContent]) -> SummaryResult:
         """
@@ -47,10 +53,14 @@ class ContentSummarizer:
             SummaryResult object with summary and metadata
         """
         try:
+            # If LLM is not available, return a basic summary
+            if not self.llm:
+                return self._create_fallback_summary(query, scraped_content)
+            
             # Filter successful scrapes with meaningful content
             valid_content = [
                 content for content in scraped_content 
-                if content.success and len(content.content) >= config.MIN_CONTENT_LENGTH
+                if content.success and len(content.content) >= self.min_content_length
             ]
             
             if not valid_content:
@@ -89,6 +99,61 @@ class ContentSummarizer:
         except Exception as e:
             logger.error(f"Error summarizing content for query '{query}': {e}")
             return self._create_error_summary(query, scraped_content, str(e))
+    
+    def _create_fallback_summary(self, query: str, scraped_content: List[ScrapedContent]) -> SummaryResult:
+        """Create a basic summary when LLM is not available."""
+        try:
+            # Filter successful scrapes
+            valid_content = [content for content in scraped_content if content.success]
+            
+            if not valid_content:
+                return self._create_empty_summary(query, scraped_content)
+            
+            # Create a simple summary by combining first sentences from each source
+            summary_parts = []
+            key_points = []
+            
+            for content in valid_content[:3]:  # Use first 3 sources
+                # Get first few sentences
+                sentences = content.content.split('. ')
+                if sentences:
+                    # Add first meaningful sentence
+                    for sentence in sentences[:2]:
+                        if len(sentence.strip()) > 50:
+                            summary_parts.append(sentence.strip() + '.')
+                            break
+                
+                # Extract a key point
+                for sentence in sentences[:5]:
+                    if len(sentence.strip()) > 30 and len(sentence.strip()) < 150:
+                        key_points.append(sentence.strip())
+                        break
+            
+            # Combine into summary
+            if summary_parts:
+                summary = f"Based on the available sources for '{query}': " + " ".join(summary_parts)
+            else:
+                summary = f"Information found about '{query}' from {len(valid_content)} sources."
+            
+            # Ensure we have some key points
+            if not key_points:
+                key_points = [
+                    f"Found information from {len(valid_content)} sources",
+                    "Content retrieved from web search",
+                    "Summary created without AI processing"
+                ]
+            
+            return SummaryResult(
+                summary=summary,
+                key_points=key_points[:5],  # Limit key points
+                sources=[content.url for content in valid_content],
+                confidence=0.3,  # Lower confidence for fallback
+                word_count=len(summary.split())
+            )
+            
+        except Exception as e:
+            logger.error(f"Error in fallback summary: {e}")
+            return self._create_empty_summary(query, scraped_content)
     
     def _create_system_prompt(self) -> str:
         """Create the system prompt for content summarization."""
@@ -146,7 +211,7 @@ Ensure the summary is substantial (at least 150 words) but concise (maximum 500 
             truncated_content = content.content[:2000] + "..." if len(content.content) > 2000 else content.content
             
             prompt_parts.extend([
-                f"\n--- Source {i}: {content.title} ({content.url}) ---",
+                f"\n--- Source {i}: {content.title or 'Untitled'} ({content.url}) ---",
                 truncated_content,
                 ""
             ])
@@ -169,8 +234,21 @@ Ensure the summary is substantial (at least 150 words) but concise (maximum 500 
             Parsed summary data dictionary
         """
         try:
+            # Clean up response content
+            cleaned_content = response_content.strip()
+            
+            # Remove any markdown code blocks if present
+            if cleaned_content.startswith('```json'):
+                cleaned_content = cleaned_content[7:]
+            if cleaned_content.startswith('```'):
+                cleaned_content = cleaned_content[3:]
+            if cleaned_content.endswith('```'):
+                cleaned_content = cleaned_content[:-3]
+            
+            cleaned_content = cleaned_content.strip()
+            
             # Try to parse as JSON
-            summary_data = json.loads(response_content)
+            summary_data = json.loads(cleaned_content)
             
             # Validate required fields
             required_fields = ["summary", "key_points", "confidence"]
@@ -191,10 +269,14 @@ Ensure the summary is substantial (at least 150 words) but concise (maximum 500 
             # Ensure confidence is in valid range
             summary_data["confidence"] = max(0.0, min(1.0, float(summary_data["confidence"])))
             
+            # Ensure key points are strings
+            summary_data["key_points"] = [str(point) for point in summary_data["key_points"] if point]
+            
             return summary_data
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON response: {e}")
+            logger.debug(f"Raw response: {response_content}")
             # Try to extract content if JSON parsing fails
             return self._extract_fallback_summary(response_content)
         
@@ -220,13 +302,23 @@ Ensure the summary is substantial (at least 150 words) but concise (maximum 500 
         lines = summary.split('\n')
         for line in lines:
             line = line.strip()
-            if line.startswith(('•', '-', '*', '1.', '2.', '3.')):
-                key_points.append(line.lstrip('•-*123456789. '))
+            if line.startswith(('•', '-', '*', '1.', '2.', '3.', '4.', '5.', '6.', '7.')):
+                cleaned_point = line.lstrip('•-*123456789. ').strip()
+                if len(cleaned_point) > 10:
+                    key_points.append(cleaned_point)
         
-        # If no key points found, create generic ones
+        # If no key points found, create generic ones from sentences
         if not key_points:
             sentences = summary.split('. ')
-            key_points = [sentence.strip() + '.' for sentence in sentences[:3] if len(sentence.strip()) > 20]
+            key_points = []
+            for sentence in sentences[:5]:
+                sentence = sentence.strip()
+                if len(sentence) > 20 and len(sentence) < 200:
+                    key_points.append(sentence + '.' if not sentence.endswith('.') else sentence)
+        
+        # Ensure we have at least some key points
+        if not key_points:
+            key_points = ["Summary generated from available sources", "Information processed successfully"]
         
         return {
             "summary": summary,
@@ -240,11 +332,13 @@ Ensure the summary is substantial (at least 150 words) but concise (maximum 500 
         
         return SummaryResult(
             summary=f"I was unable to find sufficient information to answer your query: '{query}'. "
-                   f"The web scraping encountered issues with the available sources.",
+                   f"The web scraping encountered issues with the available sources. "
+                   f"This could be due to website restrictions, network issues, or the content not being accessible.",
             key_points=[
                 "No sufficient content was found for this query",
                 "Web scraping may have encountered technical issues",
-                "Consider rephrasing your query or trying again later"
+                "Consider rephrasing your query or trying again later",
+                "Some websites may block automated access"
             ],
             sources=failed_urls,
             confidence=0.0,
@@ -253,15 +347,20 @@ Ensure the summary is substantial (at least 150 words) but concise (maximum 500 
     
     def _create_error_summary(self, query: str, scraped_content: List[ScrapedContent], error_message: str) -> SummaryResult:
         """Create an error summary when summarization fails."""
+        sources = [content.url for content in scraped_content if content.success]
+        
         return SummaryResult(
             summary=f"An error occurred while processing your query: '{query}'. "
-                   f"Error: {error_message}",
+                   f"The system was able to retrieve content from {len(sources)} sources, "
+                   f"but encountered an issue during summarization. Error: {error_message}",
             key_points=[
-                "Content summarization encountered an error",
-                "The query processing system may be temporarily unavailable",
+                "Content was successfully retrieved from web sources",
+                "Summarization process encountered an error",
+                "The AI service may be temporarily unavailable",
+                "Raw content was obtained but not processed",
                 "Please try again later or contact support"
             ],
-            sources=[content.url for content in scraped_content],
+            sources=sources,
             confidence=0.0,
             word_count=0
         )

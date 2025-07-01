@@ -15,12 +15,21 @@ browser-use
 playwright
 beautifulsoup4
 lxml
+undetected_playwright
 
 # Data processing
 pydantic
 numpy
 requests
 scikit-learn
+
+#vector databases
+chromadb
+
+
+#templating and static files
+jinja2
+
 
 # Optional (for future)
 # fastapi-limiter

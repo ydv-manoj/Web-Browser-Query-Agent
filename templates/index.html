@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Query Agent</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="logo">
+                    <i class="fas fa-search"></i>
+                    Web Query Agent
+                </h1>
+                <div class="header-actions">
+                    <button class="btn btn-secondary" onclick="showStats()">
+                        <i class="fas fa-chart-bar"></i> Stats
+                    </button>
+                    <button class="btn btn-secondary" onclick="showHistory()">
+                        <i class="fas fa-history"></i> History
+                    </button>
+                    <button class="btn btn-danger" onclick="clearCache()">
+                        <i class="fas fa-trash"></i> Clear Cache
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Search Section -->
+            <section class="search-section">
+                <div class="search-container">
+                    <h2>AI-Powered Web Search & Summarization</h2>
+                    <p class="search-description">
+                        Enter your query below and get an intelligent summary from multiple web sources
+                    </p>
+                    
+                    <form id="searchForm" class="search-form">
+                        <div class="search-input-group">
+                            <input 
+                                type="text" 
+                                id="queryInput" 
+                                placeholder="Enter your search query..." 
+                                required
+                                autocomplete="off"
+                            >
+                            <button type="submit" class="btn btn-primary" id="searchButton">
+                                <i class="fas fa-search"></i> Search
+                            </button>
+                        </div>
+                        
+                        <div class="search-options">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="useCacheInput" checked>
+                                <span class="checkmark"></span>
+                                Use cached results for similar queries
+                            </label>
+                            <button type="button" class="btn btn-link" onclick="validateQuery()">
+                                <i class="fas fa-check-circle"></i> Validate Query
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Loading Section -->
+            <section id="loadingSection" class="loading-section hidden">
+                <div class="loading-container">
+                    <div class="loading-spinner"></div>
+                    <h3>Processing your query...</h3>
+                    <p id="loadingStatus">Initializing search...</p>
+                    <div class="loading-progress">
+                        <div class="progress-bar">
+                            <div id="progressBarFill" class="progress-fill"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Results Section -->
+            <section id="resultsSection" class="results-section hidden">
+                <div class="results-container">
+                    <!-- Result Header -->
+                    <div class="result-header">
+                        <h3 id="resultTitle">Search Results</h3>
+                        <div class="result-meta">
+                            <span id="executionTime" class="meta-item">
+                                <i class="fas fa-clock"></i> --
+                            </span>
+                            <span id="cacheStatus" class="meta-item">
+                                <i class="fas fa-database"></i> --
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Summary -->
+                    <div class="summary-card">
+                        <h4><i class="fas fa-file-text"></i> Summary</h4>
+                        <div id="summaryContent" class="summary-content"></div>
+                    </div>
+
+                    <!-- Key Points -->
+                    <div class="key-points-card">
+                        <h4><i class="fas fa-list"></i> Key Points</h4>
+                        <ul id="keyPointsList" class="key-points-list"></ul>
+                    </div>
+
+                    <!-- Sources -->
+                    <div class="sources-card">
+                        <h4><i class="fas fa-link"></i> Sources</h4>
+                        <div id="sourcesList" class="sources-list"></div>
+                    </div>
+
+                    <!-- Scraping Details -->
+                    <div class="details-card collapsible">
+                        <h4 onclick="toggleDetails()" class="collapsible-header">
+                            <i class="fas fa-info-circle"></i> 
+                            Scraping Details 
+                            <i class="fas fa-chevron-down toggle-icon"></i>
+                        </h4>
+                        <div id="scrapingDetails" class="details-content hidden"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Error Section -->
+            <section id="errorSection" class="error-section hidden">
+                <div class="error-container">
+                    <div class="error-icon">
+                        <i class="fas fa-exclamation-triangle"></i>
+                    </div>
+                    <h3>Something went wrong</h3>
+                    <p id="errorMessage">An unexpected error occurred</p>
+                    <button class="btn btn-primary" onclick="hideError()">
+                        Try Again
+                    </button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Stats Modal -->
+        <div id="statsModal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-chart-bar"></i> Application Statistics</h3>
+                    <button class="modal-close" onclick="hideStats()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value" id="totalQueries">--</div>
+                            <div class="stat-label">Total Queries</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="cacheHitRate">--%</div>
+                            <div class="stat-label">Cache Hit Rate</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="avgExecutionTime">--s</div>
+                            <div class="stat-label">Avg Execution Time</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="totalPages">--</div>
+                            <div class="stat-label">Pages Scraped</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="vectorEntries">--</div>
+                            <div class="stat-label">Vector DB Entries</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="dbSize">-- MB</div>
+                            <div class="stat-label">Database Size</div>
+                        </div>
+                    </div>
+                    <div class="stats-details">
+                        <h4>Detailed Statistics</h4>
+                        <table class="stats-table">
+                            <tr>
+                                <td>Valid Queries</td>
+                                <td id="validQueries">--</td>
+                            </tr>
+                            <tr>
+                                <td>Invalid Queries</td>
+                                <td id="invalidQueries">--</td>
+                            </tr>
+                            <tr>
+                                <td>Cache Hits</td>
+                                <td id="cacheHits">--</td>
+                            </tr>
+                            <tr>
+                                <td>Cache Misses</td>
+                                <td id="cacheMisses">--</td>
+                            </tr>
+                            <tr>
+                                <td>Last Updated</td>
+                                <td id="lastUpdated">--</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- History Modal -->
+        <div id="historyModal" class="modal hidden">
+            <div class="modal-content large">
+                <div class="modal-header">
+                    <h3><i class="fas fa-history"></i> Query History</h3>
+                    <button class="modal-close" onclick="hideHistory()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="history-controls">
+                        <div class="search-input-group small">
+                            <input 
+                                type="text" 
+                                id="historySearchInput" 
+                                placeholder="Search history..."
+                                onkeyup="if(event.key==='Enter') searchHistory()"
+                            >
+                            <button type="button" class="btn btn-secondary" onclick="searchHistory()">
+                                <i class="fas fa-search"></i>
+                            </button>
+                        </div>
+                        <button class="btn btn-primary" onclick="refreshHistory()">
+                            <i class="fas fa-sync"></i> Refresh
+                        </button>
+                    </div>
+                    <div id="historyList" class="history-list">
+                        <!-- History items will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Validation Modal -->
+        <div id="validationModal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-check-circle"></i> Query Validation</h3>
+                    <button class="modal-close" onclick="hideValidation()">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div id="validationResults" class="validation-results">
+                        <!-- Validation results will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div id="toastContainer" class="toast-container"></div>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/static/script.js"></script>
+</body>
+</html>

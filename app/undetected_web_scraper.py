@@ -11,13 +11,9 @@ import random
 from typing import List, Optional
 from datetime import datetime
 
-try:
-    from undetected_playwright import async_playwright
-    UNDETECTED_AVAILABLE = True
-except ImportError:
-    # Fallback to regular playwright
-    from playwright.async_api import async_playwright
-    UNDETECTED_AVAILABLE = False
+# Fixed imports
+from playwright.async_api import async_playwright
+from undetected_playwright import Malenia  # Import Malenia for async stealth
 
 from bs4 import BeautifulSoup
 
@@ -36,10 +32,7 @@ class EnhancedUndetectedWebScraper:
         self.browser = None
         self.playwright = None
         
-        if UNDETECTED_AVAILABLE:
-            logger.info("Using undetected-playwright-python for maximum stealth")
-        else:
-            logger.warning("undetected-playwright-python not available, using regular playwright")
+        logger.info("Using undetected-playwright for maximum stealth")
         
         # Comprehensive browser configurations with realistic headers
         self.browser_configs = [
@@ -187,7 +180,7 @@ class EnhancedUndetectedWebScraper:
             context = await self._create_enhanced_context()
             page = await context.new_page()
             
-            # Apply enhanced scripts
+            # Apply enhanced scripts - this is the key fix
             await self._apply_enhanced_scripts(page)
             
             # Try multiple search engines
@@ -237,6 +230,10 @@ class EnhancedUndetectedWebScraper:
             java_script_enabled=True
         )
         
+        # CRITICAL FIX: Apply Malenia stealth to the context
+        await Malenia.apply_stealth(context)
+        logger.info("🥷 Malenia stealth applied to context")
+        
         return context
     
     async def _apply_enhanced_scripts(self, page):
@@ -262,6 +259,24 @@ class EnhancedUndetectedWebScraper:
             Object.defineProperty(navigator, 'languages', {
                 get: () => ['en-US', 'en'],
             });
+            
+            // Override chrome runtime
+            Object.defineProperty(window, 'chrome', {
+                get: () => ({
+                    runtime: {
+                        onConnect: undefined,
+                        onMessage: undefined
+                    }
+                })
+            });
+            
+            // Override permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
         """)
     
     async def _search_duckduckgo_enhanced(self, page, query: str) -> List[WebSearchResult]:
@@ -557,8 +572,6 @@ class EnhancedUndetectedWebScraper:
         try:
             context = await self._create_enhanced_context()
             page = await context.new_page()
-            
-            await self._apply_enhanced_scripts(page)
             
             # Navigate to URL
             response = await page.goto(url, timeout=config.SCRAPE_TIMEOUT * 1000)

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Web Browser Query Agent - CLI Interface
-A CLI tool that validates queries, searches the web, and provides AI-powered summaries.
+Web Browser Query Agent - CLI and Web Interface
+A tool that validates queries, searches the web, and provides AI-powered summaries.
+Supports both CLI and web interface via FastAPI.
 """
 
 import asyncio
 import click
 import logging
 import time
+import uvicorn
 from datetime import datetime
 from typing import Optional
 
@@ -15,14 +17,14 @@ from typing import Optional
 from app.config import config
 from app.models import QueryResult, AgentResponse, QueryStatus
 from app.query_processor import QueryProcessor
-from app.undetected_web_scraper import EnhancedUndetectedWebScraper  # Only this scraper
+from app.undetected_web_scraper import EnhancedUndetectedWebScraper
 from app.summarizer import ContentSummarizer
 from app.similarity_checker import SimilarityChecker
-from app.cache_manager import CacheManager
+from app.cache_manager import VectorStoreManager
 
 # Set up comprehensive logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Set to DEBUG to see all logs
+    level=logging.INFO,  # Default to INFO for CLI
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # Console output
@@ -46,20 +48,18 @@ class WebQueryAgent:
         self.summarizer = ContentSummarizer()
         logger.info("✅ Content summarizer initialized")
         
-        self.cache_manager = CacheManager()
-        logger.info("✅ Cache manager initialized")
-        
-        # Only using EnhancedUndetectedWebScraper
-        self.enhanced_scraper = None
+        self.vector_store = VectorStoreManager()
+        logger.info("✅ Vector store initialized")
         
         logger.info("🚀 Web Query Agent initialized successfully")
     
-    async def process_query(self, query: str) -> AgentResponse:
+    async def process_query(self, query: str, use_cache: bool = True) -> AgentResponse:
         """
         Process a user query through the complete pipeline.
         
         Args:
             query: The user's search query
+            use_cache: Whether to use cached/similar results
             
         Returns:
             AgentResponse with results or error information
@@ -93,45 +93,48 @@ class WebQueryAgent:
                     execution_time=execution_time
                 )
             
-            # Step 3: Check for cached results
-            logger.info("💾 Step 3: Checking for cached results...")
-            cached_result = self.cache_manager.get_cached_result(query_hash)
-            if cached_result:
-                execution_time = time.time() - start_time
-                cached_result.cache_hit = True
-                logger.info("✅ Found cached result!")
+            if use_cache:
+                # Step 3: Check for cached results
+                logger.info("💾 Step 3: Checking for cached results...")
+                cached_result = self.vector_store.get_cached_result(query_hash)
+                if cached_result:
+                    execution_time = time.time() - start_time
+                    cached_result.cache_hit = True
+                    logger.info("✅ Found cached result!")
+                    
+                    return AgentResponse(
+                        success=True,
+                        message="Found cached result for your query",
+                        query=normalized_query,
+                        result=cached_result,
+                        execution_time=execution_time
+                    )
+                else:
+                    logger.info("🔍 No cached result found")
                 
-                return AgentResponse(
-                    success=True,
-                    message="Found cached result for your query",
-                    query=normalized_query,
-                    result=cached_result,
-                    execution_time=execution_time
-                )
-            else:
-                logger.info("🔍 No cached result found")
-            
-            # Step 4: Check for similar queries
-            logger.info("🔄 Step 4: Checking for similar queries...")
-            query_embedding = self.query_processor.generate_embedding(normalized_query)
-            cached_entries = self.cache_manager.load_cached_entries()
-            
-            similar_query = self.similarity_checker.find_similar_query(query_embedding, cached_entries)
-            if similar_query:
-                execution_time = time.time() - start_time
-                similar_query.cached_result.cache_hit = True
-                logger.info(f"✅ Found similar query: '{similar_query.original_query}' (similarity: {similar_query.similarity_score:.2f})")
+                # Step 4: Check for similar queries using vector search
+                logger.info("🔄 Step 4: Checking for similar queries using vector search...")
+                query_embedding = self.query_processor.generate_embedding(normalized_query)
+                similar_query = self.similarity_checker.find_similar_query(query_embedding, self.vector_store)
                 
-                return AgentResponse(
-                    success=True,
-                    message=f"Found similar query: '{similar_query.original_query}' (similarity: {similar_query.similarity_score:.2f})",
-                    query=normalized_query,
-                    result=similar_query.cached_result,
-                    similar_query_used=similar_query,
-                    execution_time=execution_time
-                )
+                if similar_query:
+                    execution_time = time.time() - start_time
+                    similar_query.cached_result.cache_hit = True
+                    logger.info(f"✅ Found similar query: '{similar_query.original_query}' (similarity: {similar_query.similarity_score:.2f})")
+                    
+                    return AgentResponse(
+                        success=True,
+                        message=f"Found similar query: '{similar_query.original_query}' (similarity: {similar_query.similarity_score:.2f})",
+                        query=normalized_query,
+                        result=similar_query.cached_result,
+                        similar_query_used=similar_query,
+                        execution_time=execution_time
+                    )
+                else:
+                    logger.info("🔍 No similar queries found")
             else:
-                logger.info("🔍 No similar queries found")
+                # Generate embedding even if not using cache
+                query_embedding = self.query_processor.generate_embedding(normalized_query)
             
             # Step 5: Perform web scraping with EnhancedUndetectedWebScraper
             logger.info("🌐 Step 5: Starting web scraping...")
@@ -171,10 +174,11 @@ class WebQueryAgent:
                 execution_time=time.time() - start_time
             )
             
-            # Step 8: Cache the result
-            logger.info("💾 Step 8: Caching result...")
-            self.cache_manager.save_query_result(query_result, query_embedding)
-            logger.info("✅ Result cached successfully")
+            # Step 8: Save to vector store
+            if use_cache:
+                logger.info("💾 Step 8: Saving to vector store...")
+                self.vector_store.save_query_result(query_result, query_embedding)
+                logger.info("✅ Result saved to vector store successfully")
             
             execution_time = time.time() - start_time
             logger.info(f"🎉 Query processing completed successfully in {execution_time:.2f}s")
@@ -201,9 +205,7 @@ class WebQueryAgent:
             )
     
     async def _scrape_web_content(self, query: str):
-        """
-        Scrape web content using EnhancedUndetectedWebScraper only.
-        """
+        """Scrape web content using EnhancedUndetectedWebScraper only."""
         scraped_content = []
         
         try:
@@ -260,7 +262,8 @@ def cli():
 @click.argument('query', required=True)
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
 @click.option('--json', 'output_json', is_flag=True, help='Output results in JSON format')
-def search(query: str, verbose: bool, output_json: bool):
+@click.option('--no-cache', is_flag=True, help='Skip cache and force new search')
+def search(query: str, verbose: bool, output_json: bool, no_cache: bool):
     """Search the web for a query and get an AI-powered summary."""
     
     # Set logging level based on verbose flag
@@ -281,9 +284,12 @@ def search(query: str, verbose: bool, output_json: bool):
             click.echo("⏳ This may take a moment...")
             click.echo("📝 Check the logs below for detailed progress...")
         
+        if no_cache:
+            click.echo("🚫 Cache disabled - forcing new search")
+        
         # Run async process
         logger.info("🎯 Starting async query processing...")
-        response = asyncio.run(agent.process_query(query))
+        response = asyncio.run(agent.process_query(query, use_cache=not no_cache))
         
         if output_json:
             import json
@@ -307,8 +313,8 @@ def stats():
     """Display cache and application statistics."""
     try:
         agent = WebQueryAgent()
-        stats = agent.cache_manager.get_cache_stats()
-        cache_size = agent.cache_manager.get_cache_size()
+        stats = agent.vector_store.get_cache_stats()
+        cache_size = agent.vector_store.get_cache_size()
         
         click.echo("\n📊 Web Query Agent Statistics")
         click.echo("=" * 40)
@@ -320,8 +326,8 @@ def stats():
         click.echo(f"Cache hit rate: {(stats.cache_hits / max(1, stats.cache_hits + stats.cache_misses)) * 100:.1f}%")
         click.echo(f"Average execution time: {stats.average_execution_time:.2f}s")
         click.echo(f"Total pages scraped: {stats.total_pages_scraped}")
-        click.echo(f"Cached entries: {cache_size['total_entries']}")
-        click.echo(f"Cache size: {cache_size['total_cache_size_bytes'] / 1024:.1f} KB")
+        click.echo(f"Vector DB entries: {cache_size['total_entries']}")
+        click.echo(f"Database size: {cache_size['total_cache_size_bytes'] / (1024*1024):.1f} MB")
         click.echo(f"Last updated: {stats.last_updated}")
         
     except Exception as e:
@@ -330,13 +336,13 @@ def stats():
 @cli.command()
 @click.confirmation_option(prompt='Are you sure you want to clear all cached data?')
 def clear_cache():
-    """Clear all cached query results."""
+    """Clear all cached query results from vector database."""
     try:
         agent = WebQueryAgent()
-        if agent.cache_manager.clear_cache():
-            click.echo("✅ Cache cleared successfully")
+        if agent.vector_store.clear_cache():
+            click.echo("✅ Vector database cleared successfully")
         else:
-            click.echo("❌ Failed to clear cache")
+            click.echo("❌ Failed to clear vector database")
     except Exception as e:
         click.echo(f"❌ Error clearing cache: {e}")
 
@@ -362,6 +368,63 @@ def validate(query: str):
                 
     except Exception as e:
         click.echo(f"❌ Error validating query: {e}")
+
+@cli.command()
+@click.option('--limit', '-l', default=10, help='Number of queries to show')
+@click.option('--search', '-s', help='Search term to filter queries')
+def history(limit: int, search: Optional[str]):
+    """Show query history from vector database."""
+    try:
+        agent = WebQueryAgent()
+        
+        if search:
+            queries = agent.vector_store.search_queries(search, limit)
+            click.echo(f"\n🔍 Search results for '{search}' (showing {len(queries)} results)")
+        else:
+            queries = agent.vector_store.get_all_queries(limit)
+            click.echo(f"\n📚 Query History (showing last {len(queries)} queries)")
+        
+        click.echo("=" * 60)
+        
+        for i, query_data in enumerate(queries, 1):
+            click.echo(f"{i}. Query: '{query_data['query']}'")
+            click.echo(f"   Status: {query_data['status']} | Confidence: {query_data['confidence']:.2f}")
+            click.echo(f"   Created: {query_data['created_at']} | Pages: {query_data['pages_scraped']}")
+            click.echo(f"   Execution time: {query_data['execution_time']:.2f}s")
+            click.echo()
+        
+        if not queries:
+            click.echo("No queries found.")
+            
+    except Exception as e:
+        click.echo(f"❌ Error getting history: {e}")
+
+@cli.command()
+@click.option('--host', default='127.0.0.1', help='Host to bind to')
+@click.option('--port', default=8000, help='Port to bind to')
+@click.option('--reload', is_flag=True, help='Enable auto-reload for development')
+def serve(host: str, port: int, reload: bool):
+    """Start the FastAPI web server."""
+    click.echo("🌐 Starting Web Query Agent server...")
+    click.echo(f"📍 Server will be available at: http://{host}:{port}")
+    click.echo("🔧 Press Ctrl+C to stop the server")
+    
+    try:
+        # Import the FastAPI app
+        from app.app import app
+        
+        # Configure uvicorn
+        uvicorn.run(
+            "app.app:app",
+            host=host,
+            port=port,
+            reload=reload,
+            log_level="info"
+        )
+    except KeyboardInterrupt:
+        click.echo("\n🛑 Server stopped by user")
+    except Exception as e:
+        click.echo(f"❌ Error starting server: {e}")
 
 def _display_response(response: AgentResponse, verbose: bool):
     """Display the agent response in a user-friendly format."""
