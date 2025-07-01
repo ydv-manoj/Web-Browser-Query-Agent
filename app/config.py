@@ -31,7 +31,7 @@ class Config:
     
     # Similarity Thresholds
     SIMILARITY_THRESHOLD: float = float(os.getenv("SIMILARITY_THRESHOLD", "0.85"))
-    
+    SEMANTIC_SIMILARITY_THRESHOLD: float = float(os.getenv("SEMANTIC_SIMILARITY_THRESHOLD", "0.8"))
     # Cache Configuration
     CACHE_DIR: Path = Path("cache")
     QUERIES_CACHE_FILE: Path = CACHE_DIR / "queries.json"

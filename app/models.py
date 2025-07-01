@@ -113,11 +113,12 @@ class QueryResult(BaseModel):
         return len(self.successful_scrapes) / len(self.scraped_content)
 
 class SimilarQuery(BaseModel):
-    """Model for similar query match."""
+    """Model for similar query results with semantic validation."""
     original_query: str
     similarity_score: float
-    cached_result: QueryResult
-    distance: Optional[float] = Field(default=None, description="Vector distance for debugging")  # Added for vector search
+    cached_result: "QueryResult"  # Forward reference
+    semantic_similarity: Optional[float] = None  # New field for LLM confidence
+    semantic_reason: Optional[str] = None  # New field for LLM reasoning
     
     class Config:
         arbitrary_types_allowed = True

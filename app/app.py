@@ -141,120 +141,130 @@ class WebQueryAgent:
         self.vector_store = vector_store
     
     async def process_query(self, query: str, use_cache: bool = True) -> Dict[str, Any]:
-        """Process a user query through the complete pipeline."""
-        start_time = time.time()
-        
-        try:
-            logger.info(f"🔍 Processing API query: '{query}'")
+            """Process a user query through the complete pipeline."""
+            start_time = time.time()
             
-            # Check if components are initialized
-            if not self.query_processor:
-                raise Exception("Query processor not initialized")
-            
-            # Step 1: Normalize and validate
-            normalized_query = self.query_processor.normalize_query(query)
-            query_hash = self.query_processor.generate_query_hash(normalized_query)
-            
-            # Step 2: Classify the query
-            classification = self.query_processor.classify_query(normalized_query)
-            
-            if classification.status == QueryStatus.INVALID:
-                return {
-                    "success": False,
-                    "message": f"Invalid query: {classification.reason}",
-                    "query": normalized_query,
-                    "error": classification.reason,
-                    "execution_time": time.time() - start_time
-                }
-            
-            if use_cache and self.vector_store:
-                # Step 3: Check for cached results
-                cached_result = self.vector_store.get_cached_result(query_hash)
-                if cached_result:
+            try:
+                logger.info(f"🔍 Processing API query: '{query}'")
+                
+                # Check if components are initialized
+                if not self.query_processor:
+                    raise Exception("Query processor not initialized")
+                
+                # Step 1: Normalize and validate
+                normalized_query = self.query_processor.normalize_query(query)
+                query_hash = self.query_processor.generate_query_hash(normalized_query)
+                
+                # Step 2: Classify the query
+                classification = self.query_processor.classify_query(normalized_query)
+                
+                if classification.status == QueryStatus.INVALID:
                     return {
-                        "success": True,
-                        "message": "Found cached result for your query",
+                        "success": False,
+                        "message": f"Invalid query: {classification.reason}",
                         "query": normalized_query,
-                        "result": cached_result.dict(),
-                        "execution_time": time.time() - start_time,
-                        "cache_hit": True
+                        "error": classification.reason,
+                        "execution_time": time.time() - start_time
                     }
                 
-                # Step 4: Check for similar queries
-                query_embedding = self.query_processor.generate_embedding(normalized_query)
-                if self.similarity_checker:
-                    similar_query = self.similarity_checker.find_similar_query(query_embedding, self.vector_store)
-                    
-                    if similar_query:
+                if use_cache and self.vector_store:
+                    # Step 3: Check for cached results
+                    cached_result = self.vector_store.get_cached_result(query_hash)
+                    if cached_result:
                         return {
                             "success": True,
-                            "message": f"Found similar query: '{similar_query.original_query}' (similarity: {similar_query.similarity_score:.2f})",
+                            "message": "Found cached result for your query",
                             "query": normalized_query,
-                            "result": similar_query.cached_result.dict(),
-                            "similar_query_used": {
-                                "original_query": similar_query.original_query,
-                                "similarity_score": similar_query.similarity_score
-                            },
+                            "result": cached_result.dict(),
                             "execution_time": time.time() - start_time,
                             "cache_hit": True
                         }
-            else:
-                query_embedding = self.query_processor.generate_embedding(normalized_query)
-            
-            # Step 5: Perform web scraping
-            logger.info("🌐 Starting web scraping...")
-            scraped_content = await self._scrape_web_content(normalized_query)
-            
-            if not scraped_content:
+                    
+                    # Step 4: Check for similar queries with semantic validation
+                    query_embedding = self.query_processor.generate_embedding(normalized_query)
+                    if self.similarity_checker:
+                        # Pass the normalized query text for semantic comparison
+                        similar_query = self.similarity_checker.find_similar_query(
+                            query_embedding, 
+                            self.vector_store,
+                            current_query=normalized_query  # Pass the query text
+                        )
+                        
+                        if similar_query:
+                            # Include semantic similarity info in response
+                            similar_query_info = {
+                                "original_query": similar_query.original_query,
+                                "embedding_similarity": similar_query.similarity_score,
+                                "semantic_similarity": similar_query.semantic_similarity,
+                                "semantic_reason": similar_query.semantic_reason
+                            }
+                            
+                            return {
+                                "success": True,
+                                "message": f"Found semantically similar query: '{similar_query.original_query}'",
+                                "query": normalized_query,
+                                "result": similar_query.cached_result.dict(),
+                                "similar_query_used": similar_query_info,
+                                "execution_time": time.time() - start_time,
+                                "cache_hit": True
+                            }
+                else:
+                    query_embedding = self.query_processor.generate_embedding(normalized_query)
+                
+                # Step 5: Perform web scraping
+                logger.info("🌐 Starting web scraping...")
+                scraped_content = await self._scrape_web_content(normalized_query)
+                
+                if not scraped_content:
+                    return {
+                        "success": False,
+                        "message": "Failed to scrape any web content for your query",
+                        "query": normalized_query,
+                        "error": "Web scraping failed",
+                        "execution_time": time.time() - start_time
+                    }
+                
+                # Step 6: Summarize content
+                summary = None
+                if self.summarizer:
+                    summary = self.summarizer.summarize_content(normalized_query, scraped_content)
+                
+                # Step 7: Create query result
+                query_result = QueryResult(
+                    query=normalized_query,
+                    query_hash=query_hash,
+                    classification=classification,
+                    scraped_content=scraped_content,
+                    summary=summary,
+                    embedding=query_embedding,
+                    created_at=datetime.now(),
+                    execution_time=time.time() - start_time
+                )
+                
+                # Step 8: Save to vector store
+                if use_cache and self.vector_store:
+                    self.vector_store.save_query_result(query_result, query_embedding)
+                
+                return {
+                    "success": True,
+                    "message": "Successfully processed your query",
+                    "query": normalized_query,
+                    "result": query_result.dict(),
+                    "execution_time": time.time() - start_time,
+                    "cache_hit": False
+                }
+                
+            except Exception as e:
+                logger.error(f"❌ Error processing query '{query}': {e}")
+                logger.error(f"❌ Traceback: {traceback.format_exc()}")
                 return {
                     "success": False,
-                    "message": "Failed to scrape any web content for your query",
-                    "query": normalized_query,
-                    "error": "Web scraping failed",
+                    "message": "An error occurred while processing your query",
+                    "query": query,
+                    "error": str(e),
                     "execution_time": time.time() - start_time
                 }
-            
-            # Step 6: Summarize content
-            summary = None
-            if self.summarizer:
-                summary = self.summarizer.summarize_content(normalized_query, scraped_content)
-            
-            # Step 7: Create query result
-            query_result = QueryResult(
-                query=normalized_query,
-                query_hash=query_hash,
-                classification=classification,
-                scraped_content=scraped_content,
-                summary=summary,
-                embedding=query_embedding,
-                created_at=datetime.now(),
-                execution_time=time.time() - start_time
-            )
-            
-            # Step 8: Save to vector store
-            if use_cache and self.vector_store:
-                self.vector_store.save_query_result(query_result, query_embedding)
-            
-            return {
-                "success": True,
-                "message": "Successfully processed your query",
-                "query": normalized_query,
-                "result": query_result.dict(),
-                "execution_time": time.time() - start_time,
-                "cache_hit": False
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Error processing query '{query}': {e}")
-            logger.error(f"❌ Traceback: {traceback.format_exc()}")
-            return {
-                "success": False,
-                "message": "An error occurred while processing your query",
-                "query": query,
-                "error": str(e),
-                "execution_time": time.time() - start_time
-            }
-    
+                
     async def _scrape_web_content(self, query: str):
         """Scrape web content using EnhancedUndetectedWebScraper."""
         try:
