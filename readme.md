@@ -191,7 +191,7 @@ Key configuration options in `app/config.py`:
 ```python
 # Gemini AI settings
 GEMINI_API_KEY = "your-api-key"
-GEMINI_MODEL = "gemini-pro"
+GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_EMBEDDING_MODEL = "models/embedding-001"
 
 # Similarity thresholds
